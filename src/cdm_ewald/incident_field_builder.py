@@ -59,9 +59,10 @@ def build_incident_field(
     wave_vectors = k[:, None] * direction
 
     # (num_wavenumbers, num_particles)
-
+    print(wave_vectors)
+    print(positions)
     phase = np.exp(1j * wave_vectors @ positions.T)
-
+    print(phase)
     # (num_wavenumbers, num_particles, 3)
 
     E = phase[:, :, None] * polarization

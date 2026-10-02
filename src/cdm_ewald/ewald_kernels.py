@@ -5,161 +5,219 @@ from cdm_ewald.lattice_utils import check_lattice_basis, reciprocal_lattice_basi
 SQRT_PI = np.sqrt(np.pi)
 
 LIGHTLINE_TOL = 1e-12
+DECAYING_PARA = 1e-12
 
-def f_ewald(Q: float,
-            k: float,
-            z: float,
-            xi: float
-) -> complex:
-    # define the wavenumber difference
+def _stable_evanescent_terms(gamma, z_distance, xi):
+    """Return the two bounded terms in the evanescent Ewald kernel."""
+    scaled_gamma = gamma / (2 * xi)
+    scaled_distance = xi * z_distance
+
+    x1 = scaled_gamma - scaled_distance
+    x2 = scaled_gamma + scaled_distance
+
+    term1 = np.exp(-gamma * z_distance) * erfc(x1)
+    term2 = np.exp(
+        -scaled_gamma**2 - scaled_distance**2
+    ) * erfcx(x2)
+    return term1, term2
+
+
+def f_ewald(Q: float, k: float, z: float, xi: float) -> complex:
+    """Evaluate the scalar reciprocal-space Ewald kernel."""
+    z_distance = abs(z)
     delta = k**2 - Q**2
 
-    # light-line limit
     if abs(delta) < LIGHTLINE_TOL:
-        return (
-            np.exp(-(xi * z) ** 2)
-            / (2 * xi * SQRT_PI)
-            - 0.5 * z * erfc(xi * z)
-        )
-    if delta > 0:
+        # Limiting absorption prescription
+        kc = complex(k, DECAYING_PARA)
 
-        beta = np.sqrt(delta)
+        # Complex vertical wavevector
+        beta = np.sqrt(kc**2 - Q**2 + 0j)
 
+        # Enforce outgoing / decaying branch:
+        # Im(beta) >= 0
+        if beta.imag < 0:
+            beta = -beta
+
+        a = beta / (2 * xi)
+        b = xi * z_distance
         return (
             1j
-            * np.exp(-1j * beta * z)
+            / (4 * beta)
             * (
-                np.exp(2j * beta * z)
-                * erfc(-1j * beta / (2 * xi) - xi * z)
-                + erfc(-1j * beta / (2 * xi) + xi * z)
+                np.exp(1j * beta * z_distance)
+                * erfc(-1j * a - b)
+                +
+                np.exp(-1j * beta * z_distance)
+                * erfc(-1j * a + b)
+            )
+        )
+        
+
+    if delta > 0:
+        beta = np.sqrt(delta)
+        return (
+            1j
+            * np.exp(-1j * beta * z_distance)
+            * (
+                np.exp(2j * beta * z_distance)
+                * erfc(-1j * beta / (2 * xi) - xi * z_distance)
+                + erfc(
+                    -1j * beta / (2 * xi) + xi * z_distance
+                )
             )
             / (4 * beta)
         )
-
     else:
-
         gamma = np.sqrt(-delta)
-
-        x1 = gamma / (2 * xi) - xi * z
-        x2 = gamma / (2 * xi) + xi * z
-
-        term1 = np.exp(-gamma * z) * erfc(x1)
-
-        # stable version of exp(gamma*z)*erfc(x2)
-        term2 = np.exp(gamma * z - x2 * x2) * erfcx(x2)
-
+        term1, term2 = _stable_evanescent_terms(
+            gamma, z_distance, xi
+        )
         return (term1 + term2) / (4 * gamma)
+# def f_ewald(
+#     Q: float,
+#     k: float,
+#     z: float,
+#     xi: float,
+#     eta: float = 1e-12,
+# ) -> complex:
+#     """
+#     Scalar reciprocal-space Ewald kernel with limiting absorption.
 
+#     Parameters
+#     ----------
+#     Q : float
+#         Magnitude of in-plane reciprocal wavevector.
+#     k : float
+#         Real background-medium wavenumber.
+#     z : float
+#         Out-of-plane separation.
+#     xi : float
+#         Ewald splitting parameter.
+#     eta : float
+#         Small positive damping used as k -> k + i eta.
 
-def d_fEwaldZ_dz(Q: float,
-            k: float,
-            z: float,
-            xi: float
-            ) -> complex:
+#     Returns
+#     -------
+#     complex
+#         Reciprocal-space scalar Ewald kernel.
+#     """
+
+#     z_distance = abs(z)
+
+#     # Limiting absorption prescription
+#     kc = complex(k, eta)
+
+#     # Complex vertical wavevector
+#     beta = np.sqrt(kc**2 - Q**2 + 0j)
+
+#     # Enforce outgoing / decaying branch:
+#     # Im(beta) >= 0
+#     if beta.imag < 0:
+#         beta = -beta
+
+#     a = beta / (2 * xi)
+#     b = xi * z_distance
+#     if abs(b)>
+#     return (
+#         1j
+#         / (4 * beta)
+#         * (
+#             np.exp(1j * beta * z_distance)
+#             * erfc(-1j * a - b)
+#             +
+#             np.exp(-1j * beta * z_distance)
+#             * erfc(-1j * a + b)
+#         )
+#     )
+
+def d_fEwaldZ_dz(
+    Q: float, k: float, z: float, xi: float
+) -> complex:
+    """Evaluate the first z derivative of the Ewald kernel."""
+    z_distance = abs(z)
+    z_sign = np.sign(z)
     delta = k**2 - Q**2
 
-    # light-line limit
     if abs(delta) < LIGHTLINE_TOL:
-        return -0.5 * erf(xi * z)
+        return -0.5 * z_sign * erf(xi * z_distance)
 
     if delta > 0:
-
         beta = np.sqrt(delta)
-
-        return (
+        derivative_at_distance = (
             0.25
-            * np.exp(-1j * beta * z)
+            * np.exp(-1j * beta * z_distance)
             * (
-                -np.exp(2j * beta * z)
-                * erfc(-1j * beta / (2 * xi) - xi * z)
-                + erfc(-1j * beta / (2 * xi) + xi * z)
+                -np.exp(2j * beta * z_distance)
+                * erfc(
+                    -1j * beta / (2 * xi) - xi * z_distance
+                )
+                + erfc(
+                    -1j * beta / (2 * xi) + xi * z_distance
+                )
             )
         )
-
+        return z_sign * derivative_at_distance
     else:
-
         gamma = np.sqrt(-delta)
-
-        x1 = gamma / (2 * xi) - xi * z
-        x2 = gamma / (2 * xi) + xi * z
-
-        term1 = -np.exp(-gamma * z) * erfc(x1)
-
-        term2 = np.exp(gamma * z - x2 * x2) * erfcx(x2)
-
-        return 0.25 * (term1 + term2)
+        term1, term2 = _stable_evanescent_terms(
+            gamma, z_distance, xi
+        )
+        return z_sign * 0.25 * (-term1 + term2)
 
 
-def d2_fEwaldZ_dz2(Q: float,
-            k: float,
-            z: float,
-            xi: float
-            ) -> complex:
+def d2_fEwaldZ_dz2(
+    Q: float, k: float, z: float, xi: float
+) -> complex:
+    """Evaluate the second z derivative of the Ewald kernel."""
+    z_distance = abs(z)
     delta = k**2 - Q**2
 
     gaussian = (
         xi
         * np.exp(
-            (delta - 4 * xi**4 * z**2)
+            (delta - 4 * xi**4 * z_distance**2)
             / (4 * xi**2)
         )
         / SQRT_PI
     )
 
-    # light-line limit
     if abs(delta) < LIGHTLINE_TOL:
         return (
             -xi
-            * np.exp(-xi**2 * z**2)
+            * np.exp(-xi**2 * z_distance**2)
             / SQRT_PI
         )
 
     if delta > 0:
-
         beta = np.sqrt(delta)
-
         return (
             -gaussian
             - 0.25j
-            * np.exp(1j * beta * z)
+            * np.exp(1j * beta * z_distance)
             * beta
             * erfc(
                 -1j * beta / (2 * xi)
-                - xi * z
+                - xi * z_distance
             )
             - 0.25j
-            * np.exp(-1j * beta * z)
+            * np.exp(-1j * beta * z_distance)
             * beta
             * erfc(
                 -1j * beta / (2 * xi)
-                + xi * z
+                + xi * z_distance
             )
         )
-
     else:
-
         gamma = np.sqrt(-delta)
-
-        x1 = gamma / (2 * xi) - xi * z
-        x2 = gamma / (2 * xi) + xi * z
-
-        term1 = (
-            np.exp(-gamma * z)
-            * gamma
-            * erfc(x1)
+        term1, term2 = _stable_evanescent_terms(
+            gamma, z_distance, xi
         )
-
-        term2 = (
-            gamma
-            * np.exp(gamma * z - x2 * x2)
-            * erfcx(x2)
-        )
-
         return 0.25 * (
-            -4 * gaussian
-            + term1
-            + term2
+            -4 * gaussian + gamma * (term1 + term2)
         )
+
+
 def reciprocal_tensor_kernel(Qx, Qy, dz, k, xi):
     """
     Full reciprocal-space dyadic Green tensor:
@@ -381,164 +439,138 @@ def self_term_scalar(k: float,
 
 
 def f_ewald_vec(Q, k, z, xi):
-
+    """Vectorized scalar Ewald kernel for an array of Q values."""
     Q = np.asarray(Q)
-
+    z_distance = abs(z)
     delta = k**2 - Q**2
-
     out = np.zeros_like(Q, dtype=complex)
-
     light = np.abs(delta) < LIGHTLINE_TOL
-
     prop = delta > LIGHTLINE_TOL
-
     evan = delta < -LIGHTLINE_TOL
-
-    # light-line limit
 
     out[light] = (
-
-        np.exp(-(xi * z) ** 2)
-
+        np.exp(-(xi * z_distance) ** 2)
         / (2 * xi * SQRT_PI)
-
-        - 0.5 * z * erfc(xi * z)
-
+        - 0.5 * z_distance * erfc(xi * z_distance)
     )
-
-    # propagating modes: delta > 0
 
     beta = np.sqrt(delta[prop])
-
     out[prop] = (
-
         1j
-
-        * np.exp(-1j * beta * z)
-
+        * np.exp(-1j * beta * z_distance)
         * (
-
-            np.exp(2j * beta * z)
-
-            * erfc(-1j * beta / (2 * xi) - xi * z)
-
-            + erfc(-1j * beta / (2 * xi) + xi * z)
-
+            np.exp(2j * beta * z_distance)
+            * erfc(
+                -1j * beta / (2 * xi) - xi * z_distance
+            )
+            + erfc(
+                -1j * beta / (2 * xi) + xi * z_distance
+            )
         )
-
         / (4 * beta)
-
     )
 
-    # evanescent modes: delta < 0
-
     gamma = np.sqrt(-delta[evan])
-
-    x1 = gamma / (2 * xi) - xi * z
-
-    x2 = gamma / (2 * xi) + xi * z
-
-    term1 = np.exp(-gamma * z) * erfc(x1)
-
-    term2 = np.exp(gamma * z - x2 * x2) * erfcx(x2)
-
+    term1, term2 = _stable_evanescent_terms(
+        gamma, z_distance, xi
+    )
     out[evan] = (term1 + term2) / (4 * gamma)
-
     return out
 
+
 def d_fEwaldZ_dz_vec(Q, k, z, xi):
+    """Vectorized first z derivative for an array of Q values."""
     Q = np.asarray(Q)
+    z_distance = abs(z)
+    z_sign = np.sign(z)
     delta = k**2 - Q**2
-
     out = np.zeros_like(Q, dtype=complex)
-
     light = np.abs(delta) < LIGHTLINE_TOL
     prop = delta > LIGHTLINE_TOL
     evan = delta < -LIGHTLINE_TOL
 
-    # light-line limit
-    out[light] = -0.5 * erf(xi * z)
+    out[light] = (
+        -0.5 * z_sign * erf(xi * z_distance)
+    )
 
-    # propagating modes
     beta = np.sqrt(delta[prop])
-
     out[prop] = (
-        0.25
-        * np.exp(-1j * beta * z)
+        z_sign
+        * 0.25
+        * np.exp(-1j * beta * z_distance)
         * (
-            -np.exp(2j * beta * z)
-            * erfc(-1j * beta / (2 * xi) - xi * z)
-            + erfc(-1j * beta / (2 * xi) + xi * z)
+            -np.exp(2j * beta * z_distance)
+            * erfc(
+                -1j * beta / (2 * xi) - xi * z_distance
+            )
+            + erfc(
+                -1j * beta / (2 * xi) + xi * z_distance
+            )
         )
     )
 
-    # evanescent modes
     gamma = np.sqrt(-delta[evan])
-
-    x1 = gamma / (2 * xi) - xi * z
-    x2 = gamma / (2 * xi) + xi * z
-
-    term1 = -np.exp(-gamma * z) * erfc(x1)
-    term2 = np.exp(gamma * z - x2 * x2) * erfcx(x2)
-
-    out[evan] = 0.25 * (term1 + term2)
-
+    term1, term2 = _stable_evanescent_terms(
+        gamma, z_distance, xi
+    )
+    out[evan] = z_sign * 0.25 * (-term1 + term2)
     return out
+
+
 def d2_fEwaldZ_dz2_vec(Q, k, z, xi):
+    """Vectorized second z derivative for an array of Q values."""
     Q = np.asarray(Q)
+    z_distance = abs(z)
     delta = k**2 - Q**2
-
     out = np.zeros_like(Q, dtype=complex)
-
     light = np.abs(delta) < LIGHTLINE_TOL
     prop = delta > LIGHTLINE_TOL
     evan = delta < -LIGHTLINE_TOL
 
     gaussian = (
         xi
-        * np.exp((delta - 4 * xi**4 * z**2) / (4 * xi**2))
+        * np.exp(
+            (delta - 4 * xi**4 * z_distance**2)
+            / (4 * xi**2)
+        )
         / SQRT_PI
     )
 
-    # light-line limit
     out[light] = (
         -xi
-        * np.exp(-xi**2 * z**2)
+        * np.exp(-xi**2 * z_distance**2)
         / SQRT_PI
     )
 
-    # propagating modes
     beta = np.sqrt(delta[prop])
-
     out[prop] = (
         -gaussian[prop]
         - 0.25j
-        * np.exp(1j * beta * z)
+        * np.exp(1j * beta * z_distance)
         * beta
-        * erfc(-1j * beta / (2 * xi) - xi * z)
+        * erfc(
+            -1j * beta / (2 * xi) - xi * z_distance
+        )
         - 0.25j
-        * np.exp(-1j * beta * z)
+        * np.exp(-1j * beta * z_distance)
         * beta
-        * erfc(-1j * beta / (2 * xi) + xi * z)
+        * erfc(
+            -1j * beta / (2 * xi) + xi * z_distance
+        )
     )
 
-    # evanescent modes
     gamma = np.sqrt(-delta[evan])
-
-    x1 = gamma / (2 * xi) - xi * z
-    x2 = gamma / (2 * xi) + xi * z
-
-    term1 = np.exp(-gamma * z) * gamma * erfc(x1)
-    term2 = gamma * np.exp(gamma * z - x2 * x2) * erfcx(x2)
-
+    term1, term2 = _stable_evanescent_terms(
+        gamma, z_distance, xi
+    )
     out[evan] = 0.25 * (
         -4 * gaussian[evan]
-        + term1
-        + term2
+        + gamma * (term1 + term2)
     )
-
     return out
-def tensor_kernel_grid(Qx, Qy, dz, k, xi, mu):
+
+
+def tensor_kernel_vec(Qx, Qy, dz, k, xi, mu):
 
     Q2 = Qx**2 + Qy**2
 
@@ -599,6 +631,7 @@ def ewald_pair_tensor(
         ri,
         rj,
         k,
+        k_parallel,
         xi,
         lattice_vectors,
         real_cut,
@@ -616,7 +649,6 @@ def ewald_pair_tensor(
         # --------------------------------------
         # REAL SPACE
         # --------------------------------------
-
         for shift_2d in real_shifts:
 
             shift = np.array([
@@ -624,7 +656,7 @@ def ewald_pair_tensor(
                 shift_2d[1],
                 0.0
             ])
-
+            phase_shift = np.exp(1j*np.dot(shift,k_parallel))
             rvec = ri - rj + shift
 
             if (
@@ -646,8 +678,7 @@ def ewald_pair_tensor(
                 print("xi =", xi)
                 print(Gtmp)
 
-            G_real += Gtmp
-                
+            G_real += Gtmp*phase_shift
 
         # --------------------------------------
         # RECIPROCAL SPACE
@@ -661,15 +692,17 @@ def ewald_pair_tensor(
         z = dr[2]
         reciprocal_basis = reciprocal_lattice_basis(lattice_vectors)
         reciprocal_vectors = sorted_lattice_vectors(reciprocal_basis, recip_cut)
-
+        grazing = False
         for reciprocal_vector in reciprocal_vectors:
 
-            Qx = reciprocal_vector[0]
-            Qy = reciprocal_vector[1]
+            Qx = reciprocal_vector[0] + k_parallel[0]
+            Qy = reciprocal_vector[1] + k_parallel[1]
             Q = np.sqrt(Qx**2 + Qy**2)
 
             if np.isclose(Q, k):
-                continue
+                print(f"Grazing")
+                # grazing = True
+                # break
 
             phase = np.exp(
                 1j*(Qx*rho[0] + Qy*rho[1])
@@ -683,14 +716,14 @@ def ewald_pair_tensor(
                 xi,
             )
 
-            if not np.all(np.isfinite(Gtmp)):
-                print("Bad reciprocal tensor!")
-                print(f"Qx={Qx}, Qy={Qy}")
-                print(f"Q={Q}")
-                print(f"z={z}")
-                print(f"k={k}")
-                print(f"xi={xi}")
-                print(Gtmp)
+            # if not np.all(np.isfinite(Gtmp)):
+            #     print("Bad reciprocal tensor!")
+            #     print(f"Qx={Qx}, Qy={Qy}")
+            #     print(f"Q={Q}")
+            #     print(f"z={z}")
+            #     print(f"k={k}")
+            #     print(f"xi={xi}")
+            #     print(Gtmp)
 
             Gk += Gtmp * phase
 
@@ -699,7 +732,6 @@ def ewald_pair_tensor(
         # --------------------------------------
         # SELF TERM
         # --------------------------------------
-
         G = G_real + Gk
 
         if np.allclose(ri, rj):
@@ -719,20 +751,20 @@ def ewald_pair_tensor(
                 Gself_scalar
                 * np.eye(3)
             )
-
             G -= Gself
         return G
 def build_ewald_matrix(
         num_particles,
         positions,
         k,
+        wavevector_direction,
         xi,
         lattice_vectors,
         real_cut,
         reciprocal_cut
     ):
         
-
+        k_parallel = k*np.array([wavevector_direction[0],wavevector_direction[1],0])
         M = np.zeros(
             (3*num_particles, 3*num_particles),
             dtype=complex,
@@ -745,6 +777,7 @@ def build_ewald_matrix(
                     positions[i],
                     positions[j],
                     k,
+                    k_parallel,
                     xi,
                     lattice_vectors,
                     real_cut,

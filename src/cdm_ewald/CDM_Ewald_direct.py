@@ -14,7 +14,7 @@ class CDM_Ewald_direct():
     
     **Parameters**
         *lattice vectors*
-            L1,L2
+            (3,2) or (2,2) arrays of lattice basis vectors in 2d. If (3,2), z component must be 0.
         *positions*
             positions of the particles
         *polarizability*
@@ -33,16 +33,7 @@ class CDM_Ewald_direct():
         
         *tol*
             The tolerance for solving the dipoles. Defaults to 0.001.
-        *quiet*
-            If True, does not print out progress statements.
-        *guess_type*
-            The guess value for each dipole:
-                "mean-field"
-                    Uses the mean-field approximated dipole as the guess value.
-                "previous"
-                    Uses the *mean-field* method for the first frequency, then uses the previous-frequency dipole value as the guess value.
-                "derivative"
-                    Uses the *mean-field* method for the first two frequencies, then uses the last two calculated dipole values to linearly extrapolate the next guess value.
+        
         
     '''
     def __init__(self,lattice_vectors,positions,polarizability,dimensionless_angular_wavenumber, wavevector_direction=np.array([0,0,1]),polarization_direction=np.array([1,0,0]),radius=1,tol=1e-3):# {{{
@@ -65,13 +56,17 @@ class CDM_Ewald_direct():
         self.polarization_direction = polarization_direction
         self.num_particles = self.positions.shape[0] 
         self.num_wavenumbers = self.dimensionless_angular_wavenumber.shape[0]
-        self.xi_ewald = np.sqrt(np.pi) / nearest_lattice_length(self.lattice_vectors)
+        self.xi_ewald = 0.5
+        #np.sqrt(np.pi) / 9.4
+        #nearest_lattice_length(self.lattice_vectors)
         self.dips = np.zeros((self.num_wavenumbers,self.num_particles,3), dtype=np.complex128)
         self.extinction_efficiency = np.zeros(self.num_wavenumbers,dtype=np.float64)
         self.incident_field_array = build_incident_field(self.wavevector_direction,
                 self.dimensionless_angular_wavenumber,
                 self.positions,
                 self.polarization_direction)
+        self.G_set = []
+        self.A_set = []
     def set_positions(self, positions):
 
         self.positions = np.asarray(positions, dtype=float)
@@ -97,39 +92,39 @@ class CDM_Ewald_direct():
         # ----------------------------------------
         
         for wavenumber_idx in range(self.num_wavenumbers):
+            print(f"run for {wavenumber_idx}")
             dimensionless_angular_wavenumber = self.dimensionless_angular_wavenumber[wavenumber_idx]
             polarizability = self.polarizability[wavenumber_idx]
             s = np.log(10/self.errortol)
             real_cut = np.sqrt(s/self.xi_ewald**2 + dimensionless_angular_wavenumber**2/(4*self.xi_ewald**2))
             reciprocal_cut = np.sqrt(dimensionless_angular_wavenumber**2 + 4*s*self.xi_ewald**2)
-            
             G = build_ewald_matrix(
                 self.num_particles,
                 self.positions,
                 dimensionless_angular_wavenumber,
+                self.wavevector_direction,
                 self.xi_ewald,
                 self.lattice_vectors,
                 real_cut,
                 reciprocal_cut
             )
-
-            # Polarizability
+            print(f"G {G}")
+             # Polarizability
             # ----------------------------------------
+            self.G_set.append(G)
 
-
-
+            print(G)
             A = (
                 np.eye(3 * self.num_particles, dtype=complex)
                 / polarizability
                 - G
             )
-
+            self.A_set.append(A)
             # ----------------------------------------
             # RHS
             # ----------------------------------------
 
-            E0 = self.incident_field_array[wavenumber_idx].T
-            print(f"ashape {A.shape} eshape {E0.shape}")
+            E0 = self.incident_field_array[wavenumber_idx].flatten()
 
             # ----------------------------------------
             # Solve
@@ -139,15 +134,15 @@ class CDM_Ewald_direct():
 
             self.dips[wavenumber_idx] = P.reshape(self.num_particles, 3)
         self.extinction_efficiency = (
-            (1/np.pi) * self.dimensionless_angular_wavenumber[:, np.newaxis]
+            (1.0 / np.pi)
+            * self.dimensionless_angular_wavenumber
             * np.imag(
-                np.einsum(
-                    'nij,nij->ni',
-                    np.conjugate(self.incident_field_array),
-                    self.dips
+                np.sum(
+                    np.conjugate(self.incident_field_array) * self.dips,
+                    axis=(1, 2),
                 )
             )
-        )
+)
 
     
             
