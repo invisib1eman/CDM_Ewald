@@ -36,7 +36,7 @@ class CDM_Ewald_pme():
         *tol*
             The tolerance for solving the dipoles. Defaults to 0.001.
     '''
-    def __init__(self,box,positions,polarizability,dimensionless_angular_wavenumber, wavevector_direction=np.array([0,0,1]),polarization_direction=np.array([1,0,0]),radius=1,tol=1e-3,xi=0.5):# {{{
+    def __init__(self,box,positions,polarizability,dimensionless_angular_wavenumber, wavevector_direction=np.array([0,0,1]),polarization_direction=np.array([1,0,0]),radius=1,tol=1e-6,xi=0.5,mu=0.5):# {{{
         self.indent_level = 0
         
 
@@ -46,7 +46,7 @@ class CDM_Ewald_pme():
         self.num_particles = None
 
         self.xi = xi
-        
+        self.mu = mu
 
         self.box = box
         self.positions = positions
@@ -64,19 +64,21 @@ class CDM_Ewald_pme():
                 self.dimensionless_angular_wavenumber,
                 self.positions,
                 self.polarization_direction)
+        self._precalculation()
     def _precalculation(self):
         self.r_cut = np.sqrt(-np.log(self.errortol)) / self.xi
         self.k_cut = 2*self.xi*np.sqrt(-np.log(self.errortol))
         self.num_grid = np.ceil(1+self.box*self.k_cut/np.pi).astype(int)
         self.grid_spacing = self.box/self.num_grid
         
-        self.neighbor_list = neighbor_pairs(
+        self.pairs, self.overlap = neighbor_pairs(
             self.positions,
             self.box,
             self.r_cut,
             self.r_hardcore,
         )
-        self.spread_matrix = build_spread_matrix(self.positions, self.box, )
+        self.spread_matrix = build_spread_matrix(self.positions, self.box, self.num_grid, self.xi, self.mu, self.errortol)
+        self.gather_matrix = build_gather_matrix(self.spread_matrix, self.box, self.num_grid)
     def set_positions(self, positions):
 
         self.positions = np.asarray(positions, dtype=float)
@@ -94,4 +96,23 @@ class CDM_Ewald_pme():
         p : (N,3)
             dipole moments
         """
-        
+        for kindex, k in enumerate(self.dimensionless_angular_wavenumber):
+            print(f"running {k}")
+            polarizability = self.polarizability[kindex]
+            incident_field = self.incident_field_array[kindex].flatten()
+            dip_guess = incident_field / polarizability
+            real_space_sparse_tensor = build_real_space_coupling_tensor(self.positions, self.pairs, self.box, k, self.xi)
+            def solve_kernel(dipoles):
+                H = total_field(dipoles, k, polarizability, self.box, self.xi, self.mu, real_space_sparse_tensor, self.spread_matrix, self.gather_matrix, self.num_grid)
+                ret = H.flatten()
+                return ret
+            solve = LinearOperator(2*[3*self.num_particles], matvec = solve_kernel,dtype = np.complex128)
+            restart = min([self.num_particles*3,10])
+            maxiter = min([self.num_particles*3,100])
+            #start = time.time()
+            dip,info = gmres(solve,incident_field,x0 = dip_guess,rtol=self.errortol,
+                                    restart = restart, maxiter = maxiter)
+            dip = dip.reshape(self.num_particles,3)
+
+
+            self.dips[kindex] = dip

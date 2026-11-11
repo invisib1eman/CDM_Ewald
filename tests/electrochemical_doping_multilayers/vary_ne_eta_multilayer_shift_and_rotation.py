@@ -131,7 +131,10 @@ idx = 0  # 9.5 nm NC
 diameter = df_heda["diameter(nm)"][idx]
 r_nc = diameter / 2
 
-doping_ratio_sequence = np.arange(1,1.5,0.05)
+doping_ratio_min = 1
+doping_ratio_max = 1.5
+doping_ratio_intev = 0.05
+doping_ratio_sequence = np.arange(doping_ratio_min,doping_ratio_max+doping_ratio_intev,doping_ratio_intev)
 ne_undoped = df_heda["ne(10^26m^-3)"][idx]
 bulk_mean_free_path = df_heda["mean_free_path(nm)"][idx]
 
@@ -331,11 +334,13 @@ metadata = {
         float(eta_doped_max),
     "eta_doped_interval":
         float(eta_doped_intev),
-    "eta_doped_sequence":
-        eta_doped_sequence.tolist(),
     # doping ratio scan
-    "doping_ratio_sequence":
-        doping_ratio_sequence.tolist(), 
+    "doping_ratio_min":
+        float(doping_ratio_min),
+    "doping_ratio_max":
+        float(doping_ratio_max),
+    "doping_ratio_interval":
+        float(doping_ratio_intev),
     # materials
     "eps_vacuum":
         float(eps_vacuum),
@@ -365,14 +370,6 @@ metadata = {
         float(light_freq_max),
     "light_freq_interval_cm-1":
         float(light_freq_intv),
-    "light_freq_list_cm-1":
-        light_freq_list.tolist(),
-    "wavelength_nm":
-        wavelength_nm.tolist(),
-    "k_real_list":
-        k_real_list.tolist(),
-    "k_dimensionless_list":
-        k_dimensionless_list.tolist(),
 
     # incident light
     "incident_theta_air_deg":

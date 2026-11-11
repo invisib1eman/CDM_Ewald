@@ -438,43 +438,62 @@ def self_term_scalar(k: float,
     return numerator / denominator
 
 
-def f_ewald_vec(Q, k, z, xi):
-    """Vectorized scalar Ewald kernel for an array of Q values."""
+def f_ewald_vec(
+    Q: np.ndarray,
+    k: float,
+    z: float,
+    xi: float,
+) -> np.ndarray:
+    """Evaluate f_ewald elementwise, preserving the input array shape."""
     Q = np.asarray(Q)
     z_distance = abs(z)
     delta = k**2 - Q**2
     out = np.zeros_like(Q, dtype=complex)
+
+    # Match the scalar function's branch conditions exactly.
     light = np.abs(delta) < LIGHTLINE_TOL
-    prop = delta > LIGHTLINE_TOL
-    evan = delta < -LIGHTLINE_TOL
+    prop = (~light) & (delta > 0)
+    evan = ~(light | prop)
+
+    # Grazing modes: same limiting-absorption prescription as f_ewald.
+    kc = complex(k, DECAYING_PARA)
+    beta = np.sqrt(kc**2 - Q[light]**2 + 0j)
+    beta = np.where(beta.imag < 0, -beta, beta)
+
+    a = beta / (2 * xi)
+    b = xi * z_distance
 
     out[light] = (
-        np.exp(-(xi * z_distance) ** 2)
-        / (2 * xi * SQRT_PI)
-        - 0.5 * z_distance * erfc(xi * z_distance)
+        1j
+        / (4 * beta)
+        * (
+            np.exp(1j * beta * z_distance)
+            * erfc(-1j * a - b)
+            + np.exp(-1j * beta * z_distance)
+            * erfc(-1j * a + b)
+        )
     )
 
+    # Propagating modes.
     beta = np.sqrt(delta[prop])
     out[prop] = (
         1j
         * np.exp(-1j * beta * z_distance)
         * (
             np.exp(2j * beta * z_distance)
-            * erfc(
-                -1j * beta / (2 * xi) - xi * z_distance
-            )
-            + erfc(
-                -1j * beta / (2 * xi) + xi * z_distance
-            )
+            * erfc(-1j * beta / (2 * xi) - xi * z_distance)
+            + erfc(-1j * beta / (2 * xi) + xi * z_distance)
         )
         / (4 * beta)
     )
 
+    # Evanescent modes: retain the stable evaluation.
     gamma = np.sqrt(-delta[evan])
     term1, term2 = _stable_evanescent_terms(
         gamma, z_distance, xi
     )
     out[evan] = (term1 + term2) / (4 * gamma)
+
     return out
 
 

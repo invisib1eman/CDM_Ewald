@@ -8,8 +8,8 @@ from scipy.sparse import coo_matrix
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from ewald_kernels import tensor_kernel, real_space_tensor, self_term_scalar, tensor_kernel_vec
-from neighbor_list import neighbor_pairs
+from cdm_ewald.ewald_kernels import reciprocal_tensor_kernel, real_space_tensor, self_term_scalar, tensor_kernel_vec
+from cdm_ewald.neighbor_list import neighbor_pairs
 from scipy.sparse.linalg import gmres,LinearOperator,cgs
 
 
@@ -335,7 +335,7 @@ def build_gather_matrix(
     return (dx * dy) * spread_matrix.transpose().tocsr()
 
 def reciprocal_space_field_function(dipoles, k, box, xi, mu, precomputed_spread_matrix, precomputed_contract_matrix, n_grids):
-    Nx = Ny = n_grids
+    Nx, Ny = n_grids
     dx = box[0] / Nx
     dy = box[1] / Ny
     qx = 2 * np.pi * np.fft.fftfreq(Nx, d=dx)
@@ -359,5 +359,5 @@ def total_field(dipoles, k, polarizability, box, xi, mu, real_space_sparse_tenso
     reciprocal_space_field = reciprocal_space_field_function(dipoles, k, box, xi, mu, precomputed_spread_matrix, precomputed_contract_matrix, n_grids)
     self_field = self_term_scalar(k,xi) * dipoles
     E_total = dipoles / polarizability
-    return E_total - 4*np.pi*(real_space_field + reciprocal_space_field - self_field)
+    return E_total - (real_space_field + reciprocal_space_field - self_field)
     
