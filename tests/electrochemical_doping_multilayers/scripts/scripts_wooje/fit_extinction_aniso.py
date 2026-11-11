@@ -23,7 +23,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import differential_evolution
 
-from tmm_aniso import calc_extinction   # engine
+from tests.electrochemical_doping_multilayers.scripts.scripts_wooje.tmm_aniso import calc_extinction   # engine
 
 # -------------------- USER INPUTS --------------------
 # Example: 13.4 nm, 8-layer film on CaF2, April 28 data (60 deg p-pol).
