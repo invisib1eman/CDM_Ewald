@@ -19,6 +19,9 @@ class CDM_Ewald_pme():
             L1,L2
         *positions*
             positions of the particles
+        *num_layers*
+            Number of planar layers, identified by distinct z coordinates in positions.
+            Defaults to 1. Particle order and the number of particles per layer may vary.
         *polarizability*
             Either a 1D or 2D array specifying the frequency dependent polarizability function of the particles. Here polarizability is defined as 4*pi*(eps_i-eps_m)/(eps_i+2*eps_m)
             If *polarizability* is a 1D array, it is assumed to be of length *num_wavelengths* and to specify the frequency dependent polarizability function for all particles. 
@@ -36,7 +39,7 @@ class CDM_Ewald_pme():
         *tol*
             The tolerance for solving the dipoles. Defaults to 0.001.
     '''
-    def __init__(self,box,positions,polarizability,dimensionless_angular_wavenumber, wavevector_direction=np.array([0,0,1]),polarization_direction=np.array([1,0,0]),radius=1,tol=1e-6,xi=0.5,mu=0.5):# {{{
+    def __init__(self,box,positions,polarizability,dimensionless_angular_wavenumber, wavevector_direction=np.array([0,0,1]),polarization_direction=np.array([1,0,0]),radius=1,tol=1e-3,xi=0.5,mu=0.5,num_layers=1):# {{{
         self.indent_level = 0
         
 
@@ -47,6 +50,7 @@ class CDM_Ewald_pme():
 
         self.xi = xi
         self.mu = mu
+        self.num_layers = num_layers
 
         self.box = box
         self.positions = positions
@@ -60,10 +64,7 @@ class CDM_Ewald_pme():
         self.num_wavenumbers = self.dimensionless_angular_wavenumber.shape[0]
         self.dips = np.zeros((self.num_wavenumbers,self.num_particles,3), dtype=np.complex128)
         self.extinction_efficiency = np.zeros(self.num_wavenumbers,dtype=np.float64)
-        self.incident_field_array = build_incident_field(self.wavevector_direction,
-                self.dimensionless_angular_wavenumber,
-                self.positions,
-                self.polarization_direction)
+        
         self._precalculation()
     def _precalculation(self):
         self.r_cut = np.sqrt(-np.log(self.errortol)) / self.xi
@@ -71,13 +72,38 @@ class CDM_Ewald_pme():
         self.num_grid = np.ceil(1+self.box*self.k_cut/np.pi).astype(int)
         self.grid_spacing = self.box/self.num_grid
         
-        self.pairs, self.overlap = neighbor_pairs(
-            self.positions,
-            self.box,
-            self.r_cut,
-            self.r_hardcore,
+        
+        
+        self.layer_heights, self.layer_ids, self.num_particles_per_layer = np.unique(
+            self.positions[:, 2],
+            return_inverse=True,
+            return_counts=True,
         )
-        self.spread_matrix = build_spread_matrix(self.positions, self.box, self.num_grid, self.xi, self.mu, self.errortol)
+
+        if len(self.layer_heights) != self.num_layers:
+            raise ValueError("num_layers must match the number of layer heights")
+
+        
+        order = np.argsort(self.layer_ids, kind="stable")
+
+        self.positions = self.positions[order]
+        self.layer_ids = self.layer_ids[order]
+        self.layer_indices = [
+                    np.flatnonzero(self.layer_ids == layer)
+                    for layer in range(self.num_layers)
+                ]
+        self.pairs, self.overlap = neighbor_pairs(
+                    self.positions,
+                    self.box,
+                    self.r_cut,
+                    self.r_hardcore,
+                )
+        self.incident_field_array = build_incident_field(self.wavevector_direction,
+                        self.dimensionless_angular_wavenumber,
+                        self.positions,
+                        self.polarization_direction)
+        self.spread_matrix = build_spread_matrix(self.positions, self.box, self.num_grid, self.xi, self.mu, self.layer_heights,
+            self.layer_ids, self.errortol, num_layers=self.num_layers)
         self.gather_matrix = build_gather_matrix(self.spread_matrix, self.box, self.num_grid)
     def set_positions(self, positions):
 
@@ -103,7 +129,7 @@ class CDM_Ewald_pme():
             dip_guess = incident_field / polarizability
             real_space_sparse_tensor = build_real_space_coupling_tensor(self.positions, self.pairs, self.box, k, self.xi)
             def solve_kernel(dipoles):
-                H = total_field(dipoles, k, polarizability, self.box, self.xi, self.mu, real_space_sparse_tensor, self.spread_matrix, self.gather_matrix, self.num_grid)
+                H = total_field(dipoles, k, polarizability, self.box, self.xi, self.mu, real_space_sparse_tensor, self.spread_matrix, self.gather_matrix, self.num_grid, num_layers=self.num_layers, layer_heights=self.layer_heights)
                 ret = H.flatten()
                 return ret
             solve = LinearOperator(2*[3*self.num_particles], matvec = solve_kernel,dtype = np.complex128)

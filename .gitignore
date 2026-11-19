@@ -19,3 +19,5 @@
 *.ipynb
 *.gsd
 *.txt
+*.lammpstrj
+literature_review.md

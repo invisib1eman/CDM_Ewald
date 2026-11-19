@@ -158,9 +158,13 @@ def build_spread_matrix(
     xi,
 
     mu,
-
+    layer_heights,
+    layer_ids,
     error_tol=1e-3,
 
+    num_layers=1,
+    
+    
 ):
 
     """
@@ -173,9 +177,22 @@ def build_spread_matrix(
 
         dipoles_flat.shape = (3*N,)
 
-        sigma_flat.shape   = (3*Nx*Ny,)
+        sigma_flat.shape   = (3*num_layers*Nx*Ny,)
+
+    Each distinct z coordinate defines a planar layer. Grid rows are ordered
+    by increasing layer height, then x, y, and component; particle columns
+    retain their input order. num_layers must match the number of heights.
 
     """
+
+    positions = np.asarray(positions, dtype=float)
+
+    if not isinstance(num_layers, (int, np.integer)) or num_layers < 1:
+        raise ValueError("num_layers must be a positive integer")
+
+
+    if len(layer_heights) != num_layers:
+        raise ValueError("num_layers must match the number of distinct z coordinates in positions")
 
     Lx, Ly = box[:2]
 
@@ -245,7 +262,7 @@ def build_spread_matrix(
 
         weights = prefactor * np.exp(-beta * r2[mask])
 
-        grid_index = ix[mask] * Ny + iy[mask]
+        grid_index = layer_ids[pid] * Ngrid + ix[mask] * Ny + iy[mask]
 
         for g, w in zip(grid_index, weights):
 
@@ -261,7 +278,7 @@ def build_spread_matrix(
 
         (data, (rows, cols)),
 
-        shape=(3 * Ngrid, 3 * N),
+        shape=(3 * num_layers * Ngrid, 3 * N),
 
         dtype=complex,
 
@@ -290,7 +307,7 @@ def build_gather_matrix(
 
         Matrix returned by build_spread_matrix().
 
-        Shape = (3*Ngrid, 3*N)
+        Shape = (3*num_layers*Ngrid, 3*N)
 
     box : (Lx, Ly)
 
@@ -302,7 +319,7 @@ def build_gather_matrix(
 
     gather_matrix : scipy.sparse.csr_matrix
 
-        Shape = (3*N, 3*Ngrid)
+        Shape = (3*N, 3*num_layers*Ngrid)
 
     Satisfies
 
@@ -310,7 +327,7 @@ def build_gather_matrix(
 
     where
 
-        grid_field.shape = (3*Ngrid,)
+        grid_field.shape = (3*num_layers*Ngrid,)
 
         field.shape      = (3*N,)
 
@@ -334,7 +351,20 @@ def build_gather_matrix(
 
     return (dx * dy) * spread_matrix.transpose().tocsr()
 
-def reciprocal_space_field_function(dipoles, k, box, xi, mu, precomputed_spread_matrix, precomputed_contract_matrix, n_grids):
+def reciprocal_space_field_function(dipoles, k, box, xi, mu, precomputed_spread_matrix, precomputed_contract_matrix, n_grids, num_layers=1, layer_heights=None):
+    """Sum fields from every source layer on every target layer.
+
+    layer_heights contains the increasing z coordinates used by
+    build_spread_matrix. It is required when num_layers > 1.
+    """
+    if layer_heights is None:
+        if num_layers != 1:
+            raise ValueError("layer_heights is required when num_layers > 1")
+        layer_heights = np.zeros(1)
+    layer_heights = np.asarray(layer_heights, dtype=float)
+    if layer_heights.shape != (num_layers,):
+        raise ValueError("layer_heights must contain one height per layer")
+
     Nx, Ny = n_grids
     dx = box[0] / Nx
     dy = box[1] / Ny
@@ -343,20 +373,23 @@ def reciprocal_space_field_function(dipoles, k, box, xi, mu, precomputed_spread_
     Qx, Qy = np.meshgrid(qx, qy, indexing="ij")
     dipoles = dipoles.reshape(-1) 
     dipoles_grid_spread = precomputed_spread_matrix @ dipoles
-    dipoles_grid_spread = dipoles_grid_spread.reshape(Nx, Ny, 3)
-    dipoles_fft = np.fft.fft2(dipoles_grid_spread, axes=(0, 1))
-    dz = 0
-    Gk = tensor_kernel_vec(Qx, Qy, dz, k, xi, mu)
-    Fk = np.einsum("...ij,...j->...i", Gk, dipoles_fft)
-    F = np.fft.ifft2(Fk, axes=(0, 1))
+    dipoles_grid_spread = dipoles_grid_spread.reshape(num_layers, Nx, Ny, 3)
+    dipoles_fft = np.fft.fft2(dipoles_grid_spread, axes=(1, 2))
+    Fk = np.zeros_like(dipoles_fft)
+    for target_layer, target_z in enumerate(layer_heights):
+        for source_layer, source_z in enumerate(layer_heights):
+            dz = target_z - source_z
+            Gk = tensor_kernel_vec(Qx, Qy, dz, k, xi, mu)
+            Fk[target_layer] += np.einsum("...ij,...j->...i", Gk, dipoles_fft[source_layer])
+    F = np.fft.ifft2(Fk, axes=(1, 2))
     F = F.reshape(-1)
     particle_field = precomputed_contract_matrix @ F
     return particle_field
 
-def total_field(dipoles, k, polarizability, box, xi, mu, real_space_sparse_tensor, precomputed_spread_matrix, precomputed_contract_matrix, n_grids):
+def total_field(dipoles, k, polarizability, box, xi, mu, real_space_sparse_tensor, precomputed_spread_matrix, precomputed_contract_matrix, n_grids, num_layers=1, layer_heights=None):
     dipoles = dipoles.reshape(-1)      # shape (3N,)
     real_space_field = real_space_sparse_tensor @ dipoles # shape (3N,) 
-    reciprocal_space_field = reciprocal_space_field_function(dipoles, k, box, xi, mu, precomputed_spread_matrix, precomputed_contract_matrix, n_grids)
+    reciprocal_space_field = reciprocal_space_field_function(dipoles, k, box, xi, mu, precomputed_spread_matrix, precomputed_contract_matrix, n_grids, num_layers=num_layers, layer_heights=layer_heights)
     self_field = self_term_scalar(k,xi) * dipoles
     E_total = dipoles / polarizability
     return E_total - (real_space_field + reciprocal_space_field - self_field)
