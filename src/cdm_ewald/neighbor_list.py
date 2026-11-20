@@ -46,7 +46,7 @@ def neighbor_pairs(
     positions[:, :2] %= box
 
     # Infinite box length means no periodicity in z
-    boxsize = np.array([box[0], box[1], np.inf])
+    boxsize = np.array([box[0], box[1], 0])
 
     tree = cKDTree(positions, boxsize=boxsize)
 
